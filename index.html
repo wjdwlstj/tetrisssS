@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>테트리스</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: #222;
+      color: white;
+      font-family: Arial, sans-serif;
+      flex-direction: column;
+    }
+    .container {
+      display: flex;
+      gap: 20px;
+      margin-top: 20px;
+      user-select: none;
+    }
+    #game {
+      display: grid;
+      grid-template-columns: repeat(10, 20px);
+      grid-template-rows: repeat(20, 20px);
+      width: 200px;
+      height: 400px;
+      border: 2px solid #555;
+      background: #111;
+    }
+    .cell {
+      width: 20px;
+      height: 20px;
+      box-sizing: border-box;
+      border: 1px solid #333;
+    }
+    .filled {
+      /* 기본 블록 스타일 */
+    }
+    .ghost {
+      opacity: 0.3;
+    }
+    #next, #stored-block {
+      display: grid;
+      grid-template-columns: repeat(4, 20px);
+      grid-template-rows: repeat(4, 20px);
+      width: 80px;
+      height: 80px;
+      margin-top: 10px;
+      border: 2px solid #555;
+    }
+    .next-cell, .stored-cell {
+      width: 20px;
+      height: 20px;
+      box-sizing: border-box;
+      border: 1px solid #333;
+    }
+    #start-screen {
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    #start-button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 18px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+    #start-button:hover {
+      background: #45a049;
+    }
+    #instructions {
+      font-size: 14px;
+      margin-top: 10px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <div id="start-screen">
+    <h1>테트리스</h1>
+    <button id="start-button">게임 시작</button>
+    <div id="instructions">
+      <p>← → : 블록 이동</p>
+      <p>스페이스바 : 블록 회전</p>
+      <p>↑ : 블록 저장/교체 (한 블록 당 1회 가능)</p>
+      <p>↓를 빠르게 2번 : 블록 바로 내리기</p>
+    </div>
+  </div>
+
+  <div class="container" style="display:none;" id="game-container">
+    <div id="game"></div>
+    <div>
+      <div id="score">점수: 0</div>
+      <div>다음 블록:</div>
+      <div id="next"></div>
+      <div>저장된 블록:</div>
+      <div id="stored-block"></div>
+    </div>
+  </div>
+
+  <audio id="bgm" loop>
+    <source src="https://upload.wikimedia.org/wikipedia/commons/4/4f/Tetris_theme.ogg" type="audio/ogg" />
+    <source src="https://upload.wikimedia.org/wikipedia/commons/4/4f/Tetris_theme.mp3" type="audio/mpeg" />
+  </audio>
+
+  <script>
+    const startButton = document.getElementById("start-button");
+    const startScreen = document.getElementById("start-screen");
+    const gameContainer = document.getElementById("game-container");
+    const game = document.getElementById("game");
+    const next = document.getElementById("next");
+    const scoreEl = document.getElementById("score");
+    const storedBlockDiv = document.getElementById("stored-block");
+    const bgm = document.getElementById("bgm");
+
+    const ROWS = 20;
+    const COLS = 10;
+
+    const blocks = [
+      [[1, 1, 1, 1]],                   // I
+      [[1, 1], [1, 1]],                 // O
+      [[0, 1, 0], [1, 1, 1]],           // T
+      [[1, 1, 0], [0, 1, 1]],           // S
+      [[0, 1, 1], [1, 1, 0]],           // Z
+      [[1, 0, 0], [1, 1, 1]],           // J
+      [[0, 0, 1], [1, 1, 1]]            // L
+    ];
+
+    let grid = [];
+    let currentBlock, currentX, currentY, currentColor;
+    let nextBlock;
+    let storedBlock = null;
+    let score = 0;
+
+    let canStore = true;  // 한 블록 당 1회 저장/교체 가능 여부
+    let dropInterval = 800;
+    let dropTimer = null;
+
+    let lastDownKeyTime = 0;
+    const DOUBLE_CLICK_DELAY = 300;
+
+    // 시작 전엔 키 입력 막기 위한 변수
+    let gameStarted = false;
+
+    function getRandomColor() {
+      const r = Math.floor(100 + Math.random() * 155);
+      const g = Math.floor(100 + Math.random() * 155);
+      const b = Math.floor(100 + Math.random() * 155);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function randomBlock() {
+      const idx = Math.floor(Math.random() * blocks.length);
+      return {
+        shape: blocks[idx].map(row => [...row]),
+        color: getRandomColor()
+      };
+    }
+
+    function getGhostY() {
+      let y = currentY;
+      while (canMove(currentX, y + 1, currentBlock)) {
+        y++;
+      }
+      return y;
+    }
+
+    function draw() {
+      game.innerHTML = "";
+
+      const display = grid.map(row => [...row]);
+
+      const ghostY = getGhostY();
+      currentBlock.forEach((row, y) => {
+        row.forEach((val, x) => {
+          if (val && ghostY + y >= 0) {
+            if (!display[ghostY + y][currentX + x])
+              display[ghostY + y][currentX + x] = "ghost";
+          }
+        });
+      });
+
+      currentBlock.forEach((row, y) => {
+        row.forEach((val, x) => {
+          if (val && currentY + y >= 0) {
+            display[currentY + y][currentX + x] = currentColor;
+          }
+        });
+      });
+
+      display.forEach(row => {
+        row.forEach(cell => {
+          const div = document.createElement("div");
+          div.className = "cell";
+          if (cell === "ghost") {
+            div.classList.add("ghost");
+            div.style.backgroundColor = currentColor;
+          } else if (cell !== null) {
+            div.classList.add("filled");
+            div.style.backgroundColor = cell;
+          }
+          game.appendChild(div);
+        });
+      });
+    }
+
+    function drawNext() {
+      next.innerHTML = "";
+      for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 4; x++) {
+          const div = document.createElement("div");
+          div.className = "next-cell";
+          if (nextBlock.shape[y] && nextBlock.shape[y][x]) {
+            div.style.backgroundColor = nextBlock.color;
+          }
+          next.appendChild(div);
+        }
+      }
+    }
+
+    function drawStored() {
+      storedBlockDiv.innerHTML = "";
+      for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 4; x++) {
+          const div = document.createElement("div");
+          div.className = "stored-cell";
+          if (storedBlock && storedBlock.shape[y] && storedBlock.shape[y][x]) {
+            div.style.backgroundColor = storedBlock.color;
+          }
+          storedBlockDiv.appendChild(div);
+        }
+      }
+    }
+
+    function canMove(x, y, block) {
+      return block.every((row, dy) =>
+        row.every((val, dx) => {
+          if (!val) return true;
+          const nx = x + dx;
+          const ny = y + dy;
+          return (
+            nx >= 0 && nx < COLS &&
+            ny < ROWS &&
+            (ny < 0 || grid[ny][nx] === null)
+          );
+        })
+      );
+    }
+
+    function fixBlock() {
+      currentBlock.forEach((row, y) => {
+        row.forEach((val, x) => {
+          if (val) {
+            grid[currentY + y][currentX + x] = currentColor;
+          }
+        });
+      });
+    }
+
+    function clearLines() {
+      let lines = 0;
+      grid = grid.filter(row => {
+        if (row.every(cell => cell !== null)) {
+          lines++;
+          return false;
+        }
+        return true;
+      });
+      while (grid.length < ROWS) grid.unshift(Array(COLS).fill(null));
+
+      if (lines > 0) {
+        score += lines * 100;
+        scoreEl.textContent = `점수: ${score}`;
+        updateSpeed();
+      }
+    }
+
+    function rotate(block) {
+      const N = block.length;
+      const M = block[0].length;
+      const result = Array.from({ length: M }, () => Array(N).fill(0));
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < M; x++) {
+          result[x][N - y - 1] = block[y][x];
+        }
+      }
+      return result;
+    }
+
+    function tryRotate() {
+      const rotated = rotate(currentBlock);
+      const tests = [0, -1, 1, -2, 2];
+      for (let offset of tests) {
+        if (canMove(currentX + offset, currentY, rotated)) {
+          currentX += offset;
+          currentBlock = rotated;
+          draw();
+          return;
+        }
+      }
+    }
+
+    function newBlock() {
+      currentBlock = nextBlock.shape;
+      currentColor = nextBlock.color;
+      nextBlock = randomBlock();
+      currentY = 0;
+      currentX = Math.floor((COLS - currentBlock[0].length) / 2);
+      canStore = true;  // 새 블록이 나오면 저장 가능 상태로 초기화
+      if (!canMove(currentX, currentY, currentBlock)) {
+        alert("게임 오버!");
+        resetGame();
+      }
+      drawNext();
+      drawStored();
+    }
+
+    function resetGame() {
+      grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+      score = 0;
+      scoreEl.textContent = `점수: ${score}`;
+      storedBlock = null;
+      nextBlock = randomBlock();
+      newBlock();
+      draw();
+    }
+
+    function drop() {
+      if (canMove(currentX, currentY + 1, currentBlock)) {
+        currentY++;
+      } else {
+        fixBlock();
+        clearLines();
+        newBlock();
+      }
+      draw();
+    }
+
+    function updateSpeed() {
+      if (dropTimer) clearInterval(dropTimer);
+      dropInterval = Math.max(100, 800 - Math.floor(score / 500) * 100);
+      dropTimer = setInterval(drop, dropInterval);
+    }
+
+    function dropToBottom() {
+      while (canMove(currentX, currentY + 1, currentBlock)) {
+        currentY++;
+      }
+      fixBlock();
+      clearLines();
+      newBlock();
+      draw();
+    }
+
+    function storeOrSwapBlock() {
+      if (!canStore) return;  // 이미 저장/교체 했으면 무시
+
+      if (!storedBlock) {
+        storedBlock = {
+          shape: currentBlock.map(row => [...row]),
+          color: currentColor
+        };
+        newBlock();
+      } else {
+        const tempShape = currentBlock;
+        const tempColor = currentColor;
+
+        currentBlock = storedBlock.shape;
+        currentColor = storedBlock.color;
+
+        storedBlock = {
+          shape: tempShape,
+          color: tempColor
+        };
+
+        currentY = 0;
+        currentX = Math.floor((COLS - currentBlock[0].length) / 2);
+
+        if (!canMove(currentX, currentY, currentBlock)) {
+          alert("게임 오버!");
+          resetGame();
+          return;
+        }
+      }
+      canStore = false;  // 저장 후에는 다시 저장 불가
+      drawNext();
+      drawStored();
+      draw();
+    }
+
+    function onKeyDown(e) {
+      if (!gameStarted) return; // 게임 시작 전 조작 막음
+
+      if (e.key === "ArrowLeft") {
+        if (canMove(currentX - 1, currentY, currentBlock)) {
+          currentX--;
+          draw();
+        }
+      } else if (e.key === "ArrowRight") {
+        if (canMove(currentX + 1, currentY, currentBlock)) {
+          currentX++;
+          draw();
+        }
+      } else if (e.key === "ArrowDown") {
+        const now = Date.now();
+        if (now - lastDownKeyTime < DOUBLE_CLICK_DELAY) {
+          dropToBottom();
+        } else {
+          if (canMove(currentX, currentY + 1, currentBlock)) {
+            currentY++;
+            draw();
+          } else {
+            fixBlock();
+            clearLines();
+            newBlock();
+            draw();
+          }
+        }
+        lastDownKeyTime = now;
+      } else if (e.key === "ArrowUp") {
+        storeOrSwapBlock();
+      } else if (e.key === " ") {
+        tryRotate();
+      }
+    }
+
+    function startGame() {
+      startScreen.style.display = "none";
+      gameContainer.style.display = "flex";
+      gameStarted = true;
+      bgm.play().catch(() => {});
+
+      grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+      score = 0;
+      scoreEl.textContent = `점수: ${score}`;
+      storedBlock = null;
+      nextBlock = randomBlock();
+      newBlock();
+      updateSpeed();
+      draw();
+
+      document.addEventListener("keydown", onKeyDown);
+    }
+
+    startButton.addEventListener("click", startGame);
+  </script>
+</body>
+</html>
